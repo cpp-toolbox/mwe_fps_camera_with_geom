@@ -61,3 +61,42 @@
 [submodule "src/graphics/colors"]
 	path = src/graphics/colors
 	url = git@github.com:cpp-toolbox/colors.git
+[submodule "src/graphics/input_graphics_sound_menu"]
+	path = src/graphics/input_graphics_sound_menu
+	url = git@github.com:cpp-toolbox/input_graphics_sound_menu.git
+[submodule "src/sound/sound_system"]
+	path = src/sound/sound_system
+	url = git@github.com:cpp-toolbox/sound_system.git
+[submodule "src/utility/config_file_parser"]
+	path = src/utility/config_file_parser
+	url = git@github.com:cpp-toolbox/config_file_parser.git
+[submodule "src/graphics/ui"]
+	path = src/graphics/ui
+	url = git@github.com:cpp-toolbox/ui.git
+[submodule "src/utility/text_utils"]
+	path = src/utility/text_utils
+	url = git@github.com:cpp-toolbox/text_utils.git
+[submodule "src/graphics/font_atlas"]
+	path = src/graphics/font_atlas
+	url = git@github.com:cpp-toolbox/font_atlas.git
+[submodule "src/graphics/grid_font"]
+	path = src/graphics/grid_font
+	url = git@github.com:cpp-toolbox/grid_font.git
+[submodule "src/utility/logger"]
+	path = src/utility/logger
+	url = git@github.com:cpp-toolbox/logger.git
+[submodule "src/graphics/texture_atlas"]
+	path = src/graphics/texture_atlas
+	url = git@github.com:cpp-toolbox/texture_atlas.git
+[submodule "src/utility/fs_utils"]
+	path = src/utility/fs_utils
+	url = git@github.com:cpp-toolbox/fs_utils.git
+[submodule "src/graphics/ui_render_suite_implementation"]
+	path = src/graphics/ui_render_suite_implementation
+	url = git@github.com:cpp-toolbox/ui_render_suite_implementation.git
+[submodule "src/utility/glm_printing"]
+	path = src/utility/glm_printing
+	url = git@github.com:cpp-toolbox/glm_printing.git
+[submodule "src/utility/observable"]
+	path = src/utility/observable
+	url = git@github.com:cpp-toolbox/observable.git
