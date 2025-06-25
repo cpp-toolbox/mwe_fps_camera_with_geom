@@ -100,3 +100,9 @@
 [submodule "src/utility/observable"]
 	path = src/utility/observable
 	url = git@github.com:cpp-toolbox/observable.git
+[submodule "src/utility/turns"]
+	path = src/utility/turns
+	url = git@github.com:cpp-toolbox/turns.git
+[submodule "src/system_logic/toolbox_engine"]
+	path = src/system_logic/toolbox_engine
+	url = git@github.com:cpp-toolbox/toolbox_engine.git

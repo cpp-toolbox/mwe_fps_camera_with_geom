@@ -22,6 +22,9 @@
 #include "graphics/fps_camera/fps_camera.hpp"
 #include "graphics/window/window.hpp"
 #include "graphics/colors/colors.hpp"
+#include "graphics/ui/ui.hpp"
+
+#include "system_logic/toolbox_engine/toolbox_engine.hpp"
 
 #include "utility/unique_id_generator/unique_id_generator.hpp"
 #include "utility/logger/logger.hpp"
@@ -64,9 +67,152 @@ EKey get_input_key_from_config_or_default_value(InputState &input_state, Configu
     return opt_val.value_or(movement_value_str_to_default_key.at(section_key));
 }
 
-int main() {
+glm::vec2 get_ndc_mouse_pos1(GLFWwindow *window, double xpos, double ypos) {
+    int width, height;
+    glfwGetWindowSize(window, &width, &height);
 
-    bool menu_enabled = true;
+    return {(2.0f * xpos) / width - 1.0f, 1.0f - (2.0f * ypos) / height};
+}
+
+glm::vec2 aspect_corrected_ndc_mouse_pos1(const glm::vec2 &ndc_mouse_pos, float x_scale) {
+    return {ndc_mouse_pos.x * x_scale, ndc_mouse_pos.y};
+}
+
+class HUD {
+  private:
+    Batcher &batcher;
+    InputState &input_state;
+    Configuration &configuration;
+    FPSCamera &fps_camera;
+    UIRenderSuiteImpl &ui_render_suite;
+    Window &window;
+
+  public:
+    HUD(Configuration &configuration, InputState &input_state, Batcher &batcher, FPSCamera &fps_camera,
+        UIRenderSuiteImpl &ui_render_suite, Window &window)
+        : batcher(batcher), input_state(input_state), configuration(configuration), fps_camera(fps_camera),
+          ui_render_suite(ui_render_suite), window(window), ui(create_ui()) {}
+
+    UI ui;
+    int fps_element_id, pos_element_id;
+    float average_fps;
+
+    UI create_ui() {
+        UI hud_ui(-1, batcher.absolute_position_with_colored_vertex_shader_batcher.object_id_generator);
+        fps_element_id = hud_ui.add_textbox(
+            "FPS", vertex_geometry::create_rectangle_from_top_right(glm::vec3(1, 1, 0), 0.2, 0.2), colors::black);
+        pos_element_id = hud_ui.add_textbox(
+            "POS", vertex_geometry::create_rectangle_from_bottom_left(glm::vec3(-1, -1, 0), 0.8, 0.4), colors::black);
+        return hud_ui;
+    }
+
+    void process_and_queue_render_hud_ui_elements() {
+
+        if (configuration.get_value("graphics", "show_pos").value_or("off") == "on") {
+            ui.modify_text_of_a_textbox(pos_element_id, vec3_to_string(fps_camera.transform.get_translation()));
+        }
+
+        if (configuration.get_value("graphics", "show_fps").value_or("off") == "on") {
+            std::ostringstream fps_stream;
+            fps_stream << std::fixed << std::setprecision(1) << average_fps;
+            ui.modify_text_of_a_textbox(fps_element_id, fps_stream.str());
+        }
+
+        auto ndc_mouse_pos =
+            get_ndc_mouse_pos1(window.glfw_window, input_state.mouse_position_x, input_state.mouse_position_y);
+        auto acnmp = aspect_corrected_ndc_mouse_pos1(ndc_mouse_pos, window.width_px / (float)window.height_px);
+
+        process_and_queue_render_ui(acnmp, ui, ui_render_suite, input_state.get_just_pressed_key_strings(),
+                                    input_state.is_just_pressed(EKey::BACKSPACE),
+                                    input_state.is_just_pressed(EKey::ENTER),
+                                    input_state.is_just_pressed(EKey::LEFT_MOUSE_BUTTON));
+    }
+};
+
+void register_input_graphics_sound_config_handlers(Configuration &configuration, FPSCamera &fps_camera,
+                                                   FixedFrequencyLoop &ffl) {
+    configuration.register_config_handler("input", "mouse_sensitivity", [&](const std::string value) {
+        float requested_sens;
+        try {
+            requested_sens = std::stof(value);
+            fps_camera.change_active_sensitivity(requested_sens);
+        } catch (const std::exception &) {
+            std::cout << "sensivity is invalid" << std::endl;
+        }
+    });
+
+    configuration.register_config_handler("graphics", "field_of_view", [&](const std::string value) {
+        float fov, default_fov = 90;
+        try {
+            fov = std::stof(value);
+            fps_camera.fov = fov;
+        } catch (const std::exception &) {
+            std::cout << "fov is invalid" << std::endl;
+        }
+    });
+
+    configuration.register_config_handler("graphics", "max_fps", [&](const std::string value) {
+        int max_fps;
+        try {
+            ffl.rate_limiter_enabled = true;
+            max_fps = std::stoi(value);
+        } catch (const std::exception &) {
+            if (value == "inf") {
+                ffl.rate_limiter_enabled = false;
+            } else {
+                std::cout << "max fps value couldn't be converted to an integer." << std::endl;
+            }
+        }
+        ffl.update_rate_hz = max_fps;
+        std::cout << "just set the update rate on the main tick" << std::endl;
+    });
+}
+
+// TODO: need to extract this
+void config_x_input_state_x_fps_camera_processing(FPSCamera &fps_camera, InputState &input_state,
+                                                  Configuration &configuration, double dt) {
+    fps_camera.process_input(
+        input_state.is_pressed(
+            get_input_key_from_config_or_default_value(input_state, configuration, config_value_slow_move)),
+        input_state.is_pressed(
+            get_input_key_from_config_or_default_value(input_state, configuration, config_value_fast_move)),
+        input_state.is_pressed(
+            get_input_key_from_config_or_default_value(input_state, configuration, config_value_forward)),
+        input_state.is_pressed(
+            get_input_key_from_config_or_default_value(input_state, configuration, config_value_left)),
+        input_state.is_pressed(
+            get_input_key_from_config_or_default_value(input_state, configuration, config_value_back)),
+        input_state.is_pressed(
+            get_input_key_from_config_or_default_value(input_state, configuration, config_value_right)),
+        input_state.is_pressed(get_input_key_from_config_or_default_value(input_state, configuration, config_value_up)),
+        input_state.is_pressed(
+            get_input_key_from_config_or_default_value(input_state, configuration, config_value_down)),
+        dt);
+}
+
+#include <string>
+#include <sstream>
+#include <utility>
+
+std::optional<std::pair<int, int>> extract_width_height_from_resolution(const std::string &resolution) {
+    std::istringstream iss(resolution);
+    int width = 0, height = 0;
+    char delimiter = 'x';
+
+    if (!(iss >> width))
+        return std::nullopt;
+
+    if (iss.peek() == delimiter)
+        iss.ignore();
+
+    if (!(iss >> height))
+        return std::nullopt;
+
+    std::pair<int, int> val = {width, height};
+    return val;
+}
+
+int main() {
 
     ConsoleLogger main_logger;
     main_logger.set_name("main");
@@ -75,15 +221,34 @@ int main() {
     // camera is initially frozen
     fps_camera.freeze_camera();
 
-    unsigned int window_width_px = 700, window_height_px = 700;
     bool start_in_fullscreen = false;
     bool start_with_mouse_captured = false;
     bool vsync = false;
 
-    main_logger.debug("1");
+    Configuration configuration("assets/config/user_cfg.ini");
 
-    Window window(window_width_px, window_height_px, "mwe fps camera with geom", start_in_fullscreen,
+    // NOTE: we use value or unless a user hasn't specified a resolution value
+    std::string resolution = configuration.get_value("graphics", "resolution").value_or("1280x720");
+
+    // NOTE: we use value or in the case that a user has specified a value but its improperly formatted.
+    auto wh = extract_width_height_from_resolution(resolution).value_or({1280, 720});
+
+    std::vector<std::string> on_off_options = {"on", "off"};
+    std::function<bool(const std::string &)> convert_on_off_to_bool = [](const std::string &user_option) {
+        if (user_option == "on") {
+            return true;
+        } else { // user option is false or an invalid string in either case return false
+            return false;
+        }
+    };
+
+    std::function<bool(const std::string &, const std::string &)> get_user_or_default_value =
+        [&](const std::string &section, const std::string &key) { return convert_on_off_to_bool(key); };
+
+    Window window(wh.first, wh.second, "mwe fps camera with geom", get_user_or_default_value("graphics", "fullscreen"),
                   start_with_mouse_captured, vsync);
+
+    FixedFrequencyLoop ffl;
 
     InputState input_state;
 
@@ -97,8 +262,6 @@ int main() {
     std::vector<ShaderType> requested_shaders = {ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR,
                                                  ShaderType::ABSOLUTE_POSITION_WITH_COLORED_VERTEX};
 
-    main_logger.debug("2");
-
     ShaderCache shader_cache(requested_shaders);
     Batcher batcher(shader_cache);
 
@@ -108,64 +271,17 @@ int main() {
                                  fps_camera.get_projection_matrix(window.width_px, window.height_px));
     });
 
-    Configuration configuration("assets/config/user_cfg.ini");
-
-    configuration.register_config_handler("graphics", "field_of_view", [&](const std::string value) {
-        float fov, default_fov = 90;
-        try {
-            fov = std::stof(value);
-        } catch (const std::exception &) {
-            fov = default_fov;
-        }
-        fps_camera.fov = fov;
-        std::cout << "just set the fov" << std::endl;
-    });
-
-    for (const auto &pair : movement_value_str_to_default_key) {
-        const std::string &value_str = pair.first;
-        EKey default_key = pair.second;
-
-        if (!configuration.has_value("input", value_str)) {
-            configuration.set_value("input", value_str, input_state.key_enum_to_object.at(default_key)->string_repr);
-        }
-    }
+    register_input_graphics_sound_config_handlers(configuration, fps_camera, ffl);
 
     UIRenderSuiteImpl ui_render_suite(batcher);
-
-    main_logger.debug("2.5");
-
+    HUD hud(configuration, input_state, batcher, fps_camera, ui_render_suite, window);
     InputGraphicsSoundMenu input_graphics_sound_menu(window, input_state, batcher, sound_system, configuration);
 
-    main_logger.debug("3");
-
-    // glPolygonMode(GL_FRONT_AND_BACK, GL_LINE); // wireframe mode
     shader_cache.set_uniform(ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR,
                              ShaderUniformVariable::RGBA_COLOR, glm::vec4(colors::cyan, 1));
 
-    std::function<void(unsigned int)> char_callback = [](unsigned int codepoint) {};
-    std::function<void(int, int, int, int)> key_callback = [&](int key, int scancode, int action, int mods) {
-        input_state.glfw_key_callback(key, scancode, action, mods);
-    };
-    std::function<void(double, double)> mouse_pos_callback = [&](double xpos, double ypos) {
-        fps_camera.mouse_callback(xpos, ypos);
-        input_state.glfw_cursor_pos_callback(xpos, ypos);
-    };
-    std::function<void(int, int, int)> mouse_button_callback = [&](int button, int action, int mods) {
-        input_state.glfw_mouse_button_callback(button, action, mods);
-    };
-    std::function<void(int, int)> frame_buffer_size_callback = [&](int width, int height) {
-        // this gets called whenever the window changes size, because the framebuffer automatically
-        // changes size, that is all done in glfw's context, then we need to update opengl's size.
-        std::cout << "framebuffersize callback called, width" << width << "height: " << height << std::endl;
-        glViewport(0, 0, width, height);
-        window.width_px = width;
-        window.height_px = height;
-
-        shader_cache.set_uniform(ShaderType::ABSOLUTE_POSITION_WITH_COLORED_VERTEX, ShaderUniformVariable::ASPECT_RATIO,
-                                 glm::vec2(height / (float)width, 1));
-    };
-    GLFWLambdaCallbackManager glcm(window.glfw_window, char_callback, key_callback, mouse_pos_callback,
-                                   mouse_button_callback, frame_buffer_size_callback);
+    GLFWLambdaCallbackManager glcm =
+        create_default_glcm_for_input_and_camera(input_state, fps_camera, window, shader_cache);
 
     auto ball = vertex_geometry::generate_torus();
     Transform ball_transform;
@@ -173,24 +289,10 @@ int main() {
     glm::mat4 identity = glm::mat4(1);
     shader_cache.set_uniform(ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR,
                              ShaderUniformVariable::CAMERA_TO_CLIP,
-                             fps_camera.get_projection_matrix(window_width_px, window_height_px));
+                             fps_camera.get_projection_matrix(window.width_px, window.height_px));
 
     shader_cache.set_uniform(ShaderType::ABSOLUTE_POSITION_WITH_COLORED_VERTEX, ShaderUniformVariable::ASPECT_RATIO,
                              glm::vec2(window.height_px / (float)window.width_px, 1));
-
-    GLuint ltw_matrices_gl_name;
-    BoundedUniqueIDGenerator ltw_id_generator(1024);
-    glm::mat4 ltw_matrices[1024];
-
-    // initialize all matrices to identity matrices
-    for (int i = 0; i < 1024; ++i) {
-        ltw_matrices[i] = identity;
-    }
-
-    glGenBuffers(1, &ltw_matrices_gl_name);
-    glBindBuffer(GL_UNIFORM_BUFFER, ltw_matrices_gl_name);
-    glBufferData(GL_UNIFORM_BUFFER, sizeof(ltw_matrices), ltw_matrices, GL_STATIC_DRAW);
-    glBindBufferBase(GL_UNIFORM_BUFFER, 0, ltw_matrices_gl_name);
 
     // RateLimitedConsoleLogger tick_logger(1);
     ConsoleLogger tick_logger;
@@ -198,11 +300,9 @@ int main() {
     std::function<void(double)> tick = [&](double dt) {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        tick_logger.debug("1");
-
         shader_cache.set_uniform(ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR,
                                  ShaderUniformVariable::CAMERA_TO_CLIP,
-                                 fps_camera.get_projection_matrix(window_width_px, window_height_px));
+                                 fps_camera.get_projection_matrix(window.width_px, window.height_px));
 
         shader_cache.set_uniform(ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR,
                                  ShaderUniformVariable::WORLD_TO_CAMERA, fps_camera.get_view_matrix());
@@ -211,66 +311,24 @@ int main() {
         batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.queue_draw(
             0, ball.indices, ball.xyz_positions, ltw_indices);
 
-        ltw_matrices[0] = ball_transform.get_transform_matrix();
+        batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.ltw_matrices[0] =
+            ball_transform.get_transform_matrix();
 
-        batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.draw_everything();
+        potentially_switch_between_menu_and_3d_view(input_state, input_graphics_sound_menu, fps_camera, window);
+        hud.process_and_queue_render_hud_ui_elements();
 
-        tick_logger.debug("2");
-
-        if (input_state.is_just_pressed(EKey::ESCAPE)) {
-            menu_enabled = !menu_enabled;
-            if (menu_enabled) {
-                fps_camera.freeze_camera();
-                window.enable_cursor();
-            } else {
-                fps_camera.unfreeze_camera();
-                window.disable_cursor();
-            }
-        }
-
-        tick_logger.debug("3");
-
-        if (menu_enabled) {
-            tick_logger.debug("3.1");
+        if (input_graphics_sound_menu.enabled) {
             input_graphics_sound_menu.process_and_queue_render_menu(window, input_state, ui_render_suite);
-        } else {
-            tick_logger.debug("3.2");
-
-            fps_camera.process_input(
-                // NOTE: guarenteed that value exists and its a valid key due to initialization phase
-                input_state.is_pressed(
-                    input_state.key_str_to_key_enum.at(configuration.get_value("input", "slow_move").value())),
-                input_state.is_pressed(
-                    input_state.key_str_to_key_enum.at(configuration.get_value("input", "fast_move").value())),
-                input_state.is_pressed(
-                    input_state.key_str_to_key_enum.at(configuration.get_value("input", "forward").value())),
-                input_state.is_pressed(
-                    input_state.key_str_to_key_enum.at(configuration.get_value("input", "left").value())),
-                input_state.is_pressed(
-                    input_state.key_str_to_key_enum.at(configuration.get_value("input", "back").value())),
-                input_state.is_pressed(
-                    input_state.key_str_to_key_enum.at(configuration.get_value("input", "right").value())),
-                input_state.is_pressed(
-                    input_state.key_str_to_key_enum.at(configuration.get_value("input", "up").value())),
-                input_state.is_pressed(
-                    input_state.key_str_to_key_enum.at(configuration.get_value("input", "down").value())),
-                dt);
         }
 
-        tick_logger.debug("4");
-
+        batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.upload_ltw_matrices();
+        batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.draw_everything();
         batcher.absolute_position_with_colored_vertex_shader_batcher.draw_everything();
 
         sound_system.play_all_sounds();
 
-        glBindBuffer(GL_UNIFORM_BUFFER, ltw_matrices_gl_name);
-        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(ltw_matrices), ltw_matrices);
-        glBindBuffer(GL_UNIFORM_BUFFER, 0);
-
         glfwSwapBuffers(window.glfw_window);
         glfwPollEvents();
-
-        tick_logger.debug("5");
 
         // tick_logger.tick();
 
@@ -279,8 +337,11 @@ int main() {
 
     std::function<bool()> termination = [&]() { return glfwWindowShouldClose(window.glfw_window); };
 
-    FixedFrequencyLoop ffl;
-    ffl.start(120, tick, termination);
+    std::function<void(IterationStats)> loop_stats_function = [&](IterationStats is) {
+        hud.average_fps = is.measured_frequency_hz;
+    };
+
+    ffl.start(120, tick, termination, loop_stats_function);
 
     return 0;
 }
