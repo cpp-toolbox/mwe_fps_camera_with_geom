@@ -1,5 +1,6 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#include <glm/fwd.hpp>
 
 // REMOVE this one day.
 #define STB_IMAGE_IMPLEMENTATION
@@ -31,42 +32,6 @@
 
 #include <iostream>
 
-std::optional<EKey> get_input_key_from_config_if_valid(InputState &input_state, Configuration &configuration,
-                                                       const std::string &section_key) {
-    auto key_value = configuration.get_value("input", section_key);
-    if (key_value.has_value()) {
-        auto key_value_str = key_value.value();
-        if (input_state.is_valid_key_string(key_value_str)) {
-            return input_state.key_str_to_key_enum.at(key_value_str);
-        }
-    }
-    return std::nullopt;
-}
-
-const std::string config_value_slow_move = "slow_move";
-const std::string config_value_fast_move = "fast_move";
-const std::string config_value_forward = "forward";
-const std::string config_value_left = "left";
-const std::string config_value_back = "back";
-const std::string config_value_right = "right";
-const std::string config_value_up = "up";
-const std::string config_value_down = "down";
-
-std::unordered_map<std::string, EKey> movement_value_str_to_default_key = {{config_value_slow_move, EKey::LEFT_CONTROL},
-                                                                           {config_value_fast_move, EKey::TAB},
-                                                                           {config_value_forward, EKey::w},
-                                                                           {config_value_left, EKey::a},
-                                                                           {config_value_back, EKey::s},
-                                                                           {config_value_right, EKey::d},
-                                                                           {config_value_up, EKey::SPACE},
-                                                                           {config_value_down, EKey::LEFT_SHIFT}};
-
-EKey get_input_key_from_config_or_default_value(InputState &input_state, Configuration &configuration,
-                                                const std::string &section_key) {
-    auto opt_val = get_input_key_from_config_if_valid(input_state, configuration, section_key);
-    return opt_val.value_or(movement_value_str_to_default_key.at(section_key));
-}
-
 glm::vec2 get_ndc_mouse_pos1(GLFWwindow *window, double xpos, double ypos) {
     int width, height;
     glfwGetWindowSize(window, &width, &height);
@@ -78,7 +43,7 @@ glm::vec2 aspect_corrected_ndc_mouse_pos1(const glm::vec2 &ndc_mouse_pos, float 
     return {ndc_mouse_pos.x * x_scale, ndc_mouse_pos.y};
 }
 
-class HUD {
+class Hud3D {
   private:
     Batcher &batcher;
     InputState &input_state;
@@ -87,40 +52,75 @@ class HUD {
     UIRenderSuiteImpl &ui_render_suite;
     Window &window;
 
+    const glm::vec3 crosshair_color = colors::green;
+
+    const std::string crosshair = R"(
+--*--
+--*--
+*****
+--*--
+--*--
+)";
+
+    vertex_geometry::Rectangle crosshair_rect = vertex_geometry::Rectangle(glm::vec3(0), 0.1, 0.1);
+
+    draw_info::IVPSolidColor crosshair_ivpsc;
+
+    int crosshair_batcher_object_id;
+
   public:
-    HUD(Configuration &configuration, InputState &input_state, Batcher &batcher, FPSCamera &fps_camera,
-        UIRenderSuiteImpl &ui_render_suite, Window &window)
+    Hud3D(Configuration &configuration, InputState &input_state, Batcher &batcher, FPSCamera &fps_camera,
+          UIRenderSuiteImpl &ui_render_suite, Window &window)
         : batcher(batcher), input_state(input_state), configuration(configuration), fps_camera(fps_camera),
           ui_render_suite(ui_render_suite), window(window), ui(create_ui()) {}
 
+    ConsoleLogger logger;
+
     UI ui;
-    int fps_element_id, pos_element_id;
+    int fps_ui_element_id, pos_ui_element_id;
     float average_fps;
 
     UI create_ui() {
-        UI hud_ui(-1, batcher.absolute_position_with_colored_vertex_shader_batcher.object_id_generator);
-        fps_element_id = hud_ui.add_textbox(
+        UI hud_ui(0, batcher.absolute_position_with_colored_vertex_shader_batcher.object_id_generator);
+        fps_ui_element_id = hud_ui.add_textbox(
             "FPS", vertex_geometry::create_rectangle_from_top_right(glm::vec3(1, 1, 0), 0.2, 0.2), colors::black);
-        pos_element_id = hud_ui.add_textbox(
+        pos_ui_element_id = hud_ui.add_textbox(
             "POS", vertex_geometry::create_rectangle_from_bottom_left(glm::vec3(-1, -1, 0), 0.8, 0.4), colors::black);
+
+        crosshair_batcher_object_id =
+            batcher.absolute_position_with_colored_vertex_shader_batcher.object_id_generator.get_id();
+        auto crosshair_ivp = vertex_geometry::text_grid_to_rect_grid(crosshair, crosshair_rect);
+        std::vector<glm::vec3> cs(crosshair_ivp.xyz_positions.size(), crosshair_color);
+        crosshair_ivpsc = draw_info::IVPSolidColor(crosshair_ivp, cs, crosshair_batcher_object_id);
+
         return hud_ui;
     }
 
     void process_and_queue_render_hud_ui_elements() {
 
         if (configuration.get_value("graphics", "show_pos").value_or("off") == "on") {
-            ui.modify_text_of_a_textbox(pos_element_id, vec3_to_string(fps_camera.transform.get_translation()));
+            ui.unhide_textbox(pos_ui_element_id);
+            ui.modify_text_of_a_textbox(pos_ui_element_id, vec3_to_string(fps_camera.transform.get_translation()));
+        } else {
+            ui.hide_textbox(pos_ui_element_id);
         }
 
         if (configuration.get_value("graphics", "show_fps").value_or("off") == "on") {
             std::ostringstream fps_stream;
             fps_stream << std::fixed << std::setprecision(1) << average_fps;
-            ui.modify_text_of_a_textbox(fps_element_id, fps_stream.str());
+            ui.modify_text_of_a_textbox(fps_ui_element_id, fps_stream.str());
+            ui.unhide_textbox(fps_ui_element_id);
+        } else {
+            ui.hide_textbox(fps_ui_element_id);
         }
 
         auto ndc_mouse_pos =
             get_ndc_mouse_pos1(window.glfw_window, input_state.mouse_position_x, input_state.mouse_position_y);
         auto acnmp = aspect_corrected_ndc_mouse_pos1(ndc_mouse_pos, window.width_px / (float)window.height_px);
+
+        batcher.absolute_position_with_colored_vertex_shader_batcher.queue_draw(
+            crosshair_batcher_object_id, crosshair_ivpsc.indices, crosshair_ivpsc.xyz_positions,
+            crosshair_ivpsc.rgb_colors);
 
         process_and_queue_render_ui(acnmp, ui, ui_render_suite, input_state.get_just_pressed_key_strings(),
                                     input_state.is_just_pressed(EKey::BACKSPACE),
@@ -129,170 +129,42 @@ class HUD {
     }
 };
 
-void register_input_graphics_sound_config_handlers(Configuration &configuration, FPSCamera &fps_camera,
-                                                   FixedFrequencyLoop &ffl) {
-    configuration.register_config_handler("input", "mouse_sensitivity", [&](const std::string value) {
-        float requested_sens;
-        try {
-            requested_sens = std::stof(value);
-            fps_camera.change_active_sensitivity(requested_sens);
-        } catch (const std::exception &) {
-            std::cout << "sensivity is invalid" << std::endl;
-        }
-    });
-
-    configuration.register_config_handler("graphics", "field_of_view", [&](const std::string value) {
-        float fov, default_fov = 90;
-        try {
-            fov = std::stof(value);
-            fps_camera.fov = fov;
-        } catch (const std::exception &) {
-            std::cout << "fov is invalid" << std::endl;
-        }
-    });
-
-    configuration.register_config_handler("graphics", "max_fps", [&](const std::string value) {
-        int max_fps;
-        try {
-            ffl.rate_limiter_enabled = true;
-            max_fps = std::stoi(value);
-        } catch (const std::exception &) {
-            if (value == "inf") {
-                ffl.rate_limiter_enabled = false;
-            } else {
-                std::cout << "max fps value couldn't be converted to an integer." << std::endl;
-            }
-        }
-        ffl.update_rate_hz = max_fps;
-        std::cout << "just set the update rate on the main tick" << std::endl;
-    });
-}
-
-// TODO: need to extract this
-void config_x_input_state_x_fps_camera_processing(FPSCamera &fps_camera, InputState &input_state,
-                                                  Configuration &configuration, double dt) {
-    fps_camera.process_input(
-        input_state.is_pressed(
-            get_input_key_from_config_or_default_value(input_state, configuration, config_value_slow_move)),
-        input_state.is_pressed(
-            get_input_key_from_config_or_default_value(input_state, configuration, config_value_fast_move)),
-        input_state.is_pressed(
-            get_input_key_from_config_or_default_value(input_state, configuration, config_value_forward)),
-        input_state.is_pressed(
-            get_input_key_from_config_or_default_value(input_state, configuration, config_value_left)),
-        input_state.is_pressed(
-            get_input_key_from_config_or_default_value(input_state, configuration, config_value_back)),
-        input_state.is_pressed(
-            get_input_key_from_config_or_default_value(input_state, configuration, config_value_right)),
-        input_state.is_pressed(get_input_key_from_config_or_default_value(input_state, configuration, config_value_up)),
-        input_state.is_pressed(
-            get_input_key_from_config_or_default_value(input_state, configuration, config_value_down)),
-        dt);
-}
-
-#include <string>
-#include <sstream>
-#include <utility>
-
-std::optional<std::pair<int, int>> extract_width_height_from_resolution(const std::string &resolution) {
-    std::istringstream iss(resolution);
-    int width = 0, height = 0;
-    char delimiter = 'x';
-
-    if (!(iss >> width))
-        return std::nullopt;
-
-    if (iss.peek() == delimiter)
-        iss.ignore();
-
-    if (!(iss >> height))
-        return std::nullopt;
-
-    std::pair<int, int> val = {width, height};
-    return val;
-}
-
 int main() {
 
-    ConsoleLogger main_logger;
-    main_logger.set_name("main");
+    ToolboxEngine tbx_engine("fps camera with geom");
 
-    FPSCamera fps_camera;
-    // camera is initially frozen
-    fps_camera.freeze_camera();
-
-    bool start_in_fullscreen = false;
-    bool start_with_mouse_captured = false;
-    bool vsync = false;
-
-    Configuration configuration("assets/config/user_cfg.ini");
-
-    // NOTE: we use value or unless a user hasn't specified a resolution value
-    std::string resolution = configuration.get_value("graphics", "resolution").value_or("1280x720");
-
-    // NOTE: we use value or in the case that a user has specified a value but its improperly formatted.
-    auto wh = extract_width_height_from_resolution(resolution).value_or({1280, 720});
-
-    std::vector<std::string> on_off_options = {"on", "off"};
-    std::function<bool(const std::string &)> convert_on_off_to_bool = [](const std::string &user_option) {
-        if (user_option == "on") {
-            return true;
-        } else { // user option is false or an invalid string in either case return false
-            return false;
-        }
-    };
-
-    std::function<bool(const std::string &, const std::string &)> get_user_or_default_value =
-        [&](const std::string &section, const std::string &key) { return convert_on_off_to_bool(key); };
-
-    Window window(wh.first, wh.second, "mwe fps camera with geom", get_user_or_default_value("graphics", "fullscreen"),
-                  start_with_mouse_captured, vsync);
-
-    FixedFrequencyLoop ffl;
-
-    InputState input_state;
-
-    std::unordered_map<SoundType, std::string> sound_type_to_file = {
-        {SoundType::UI_HOVER, "assets/sounds/hover.wav"},
-        {SoundType::UI_CLICK, "assets/sounds/click.wav"},
-        {SoundType::UI_SUCCESS, "assets/sounds/success.wav"},
-    };
-    SoundSystem sound_system(100, sound_type_to_file);
-
-    std::vector<ShaderType> requested_shaders = {ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR,
-                                                 ShaderType::ABSOLUTE_POSITION_WITH_COLORED_VERTEX};
-
-    ShaderCache shader_cache(requested_shaders);
-    Batcher batcher(shader_cache);
-
-    fps_camera.fov.add_observer([&](const float &new_value) {
-        shader_cache.set_uniform(ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR,
-                                 ShaderUniformVariable::CAMERA_TO_CLIP,
-                                 fps_camera.get_projection_matrix(window.width_px, window.height_px));
+    tbx_engine.fps_camera.fov.add_observer([&](const float &new_value) {
+        tbx_engine.shader_cache.set_uniform(
+            ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR, ShaderUniformVariable::CAMERA_TO_CLIP,
+            tbx_engine.fps_camera.get_projection_matrix(tbx_engine.window.width_px, tbx_engine.window.height_px));
     });
 
-    register_input_graphics_sound_config_handlers(configuration, fps_camera, ffl);
+    tbx_engine::register_input_graphics_sound_config_handlers(tbx_engine.configuration, tbx_engine.fps_camera,
+                                                              tbx_engine.main_loop);
 
-    UIRenderSuiteImpl ui_render_suite(batcher);
-    HUD hud(configuration, input_state, batcher, fps_camera, ui_render_suite, window);
-    InputGraphicsSoundMenu input_graphics_sound_menu(window, input_state, batcher, sound_system, configuration);
+    UIRenderSuiteImpl ui_render_suite(tbx_engine.batcher);
+    Hud3D hud(tbx_engine.configuration, tbx_engine.input_state, tbx_engine.batcher, tbx_engine.fps_camera,
+              ui_render_suite, tbx_engine.window);
+    InputGraphicsSoundMenu input_graphics_sound_menu(tbx_engine.window, tbx_engine.input_state, tbx_engine.batcher,
+                                                     tbx_engine.sound_system, tbx_engine.configuration);
 
-    shader_cache.set_uniform(ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR,
-                             ShaderUniformVariable::RGBA_COLOR, glm::vec4(colors::cyan, 1));
+    tbx_engine.shader_cache.set_uniform(ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR,
+                                        ShaderUniformVariable::RGBA_COLOR, glm::vec4(colors::cyan, 1));
 
-    GLFWLambdaCallbackManager glcm =
-        create_default_glcm_for_input_and_camera(input_state, fps_camera, window, shader_cache);
+    GLFWLambdaCallbackManager glcm = tbx_engine::create_default_glcm_for_input_and_camera(
+        tbx_engine.input_state, tbx_engine.fps_camera, tbx_engine.window, tbx_engine.shader_cache);
 
     auto ball = vertex_geometry::generate_torus();
     Transform ball_transform;
 
     glm::mat4 identity = glm::mat4(1);
-    shader_cache.set_uniform(ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR,
-                             ShaderUniformVariable::CAMERA_TO_CLIP,
-                             fps_camera.get_projection_matrix(window.width_px, window.height_px));
+    tbx_engine.shader_cache.set_uniform(
+        ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR, ShaderUniformVariable::CAMERA_TO_CLIP,
+        tbx_engine.fps_camera.get_projection_matrix(tbx_engine.window.width_px, tbx_engine.window.height_px));
 
-    shader_cache.set_uniform(ShaderType::ABSOLUTE_POSITION_WITH_COLORED_VERTEX, ShaderUniformVariable::ASPECT_RATIO,
-                             glm::vec2(window.height_px / (float)window.width_px, 1));
+    tbx_engine.shader_cache.set_uniform(ShaderType::ABSOLUTE_POSITION_WITH_COLORED_VERTEX,
+                                        ShaderUniformVariable::ASPECT_RATIO,
+                                        glm::vec2(tbx_engine.window.height_px / (float)tbx_engine.window.width_px, 1));
 
     // RateLimitedConsoleLogger tick_logger(1);
     ConsoleLogger tick_logger;
@@ -300,34 +172,41 @@ int main() {
     std::function<void(double)> tick = [&](double dt) {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        shader_cache.set_uniform(ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR,
-                                 ShaderUniformVariable::CAMERA_TO_CLIP,
-                                 fps_camera.get_projection_matrix(window.width_px, window.height_px));
+        tbx_engine.shader_cache.set_uniform(
+            ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR, ShaderUniformVariable::CAMERA_TO_CLIP,
+            tbx_engine.fps_camera.get_projection_matrix(tbx_engine.window.width_px, tbx_engine.window.height_px));
 
-        shader_cache.set_uniform(ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR,
-                                 ShaderUniformVariable::WORLD_TO_CAMERA, fps_camera.get_view_matrix());
+        tbx_engine.shader_cache.set_uniform(ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR,
+                                            ShaderUniformVariable::WORLD_TO_CAMERA,
+                                            tbx_engine.fps_camera.get_view_matrix());
 
         std::vector<unsigned int> ltw_indices(ball.xyz_positions.size(), 0);
-        batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.queue_draw(
+        tbx_engine.batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.queue_draw(
             0, ball.indices, ball.xyz_positions, ltw_indices);
 
-        batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.ltw_matrices[0] =
+        tbx_engine.batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.ltw_matrices[0] =
             ball_transform.get_transform_matrix();
 
-        potentially_switch_between_menu_and_3d_view(input_state, input_graphics_sound_menu, fps_camera, window);
+        tbx_engine::potentially_switch_between_menu_and_3d_view(tbx_engine.input_state, input_graphics_sound_menu,
+                                                                tbx_engine.fps_camera, tbx_engine.window);
+
         hud.process_and_queue_render_hud_ui_elements();
 
         if (input_graphics_sound_menu.enabled) {
-            input_graphics_sound_menu.process_and_queue_render_menu(window, input_state, ui_render_suite);
+            input_graphics_sound_menu.process_and_queue_render_menu(tbx_engine.window, tbx_engine.input_state,
+                                                                    ui_render_suite);
+        } else {
+            tbx_engine::config_x_input_state_x_fps_camera_processing(tbx_engine.fps_camera, tbx_engine.input_state,
+                                                                     tbx_engine.configuration, dt);
         }
 
-        batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.upload_ltw_matrices();
-        batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.draw_everything();
-        batcher.absolute_position_with_colored_vertex_shader_batcher.draw_everything();
+        tbx_engine.batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.upload_ltw_matrices();
+        tbx_engine.batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.draw_everything();
+        tbx_engine.batcher.absolute_position_with_colored_vertex_shader_batcher.draw_everything();
 
-        sound_system.play_all_sounds();
+        tbx_engine.sound_system.play_all_sounds();
 
-        glfwSwapBuffers(window.glfw_window);
+        glfwSwapBuffers(tbx_engine.window.glfw_window);
         glfwPollEvents();
 
         // tick_logger.tick();
@@ -335,13 +214,13 @@ int main() {
         TemporalBinarySignal::process_all();
     };
 
-    std::function<bool()> termination = [&]() { return glfwWindowShouldClose(window.glfw_window); };
+    std::function<bool()> termination = [&]() { return glfwWindowShouldClose(tbx_engine.window.glfw_window); };
 
     std::function<void(IterationStats)> loop_stats_function = [&](IterationStats is) {
         hud.average_fps = is.measured_frequency_hz;
     };
 
-    ffl.start(120, tick, termination, loop_stats_function);
+    tbx_engine.main_loop.start(tick, termination, loop_stats_function);
 
     return 0;
 }
