@@ -64,7 +64,7 @@ class Hud3D {
 
     vertex_geometry::Rectangle crosshair_rect = vertex_geometry::Rectangle(glm::vec3(0), 0.1, 0.1);
 
-    draw_info::IVPSolidColor crosshair_ivpsc;
+    draw_info::IVPColor crosshair_ivpsc;
 
     int crosshair_batcher_object_id;
 
@@ -91,7 +91,7 @@ class Hud3D {
             batcher.absolute_position_with_colored_vertex_shader_batcher.object_id_generator.get_id();
         auto crosshair_ivp = vertex_geometry::text_grid_to_rect_grid(crosshair, crosshair_rect);
         std::vector<glm::vec3> cs(crosshair_ivp.xyz_positions.size(), crosshair_color);
-        crosshair_ivpsc = draw_info::IVPSolidColor(crosshair_ivp, cs, crosshair_batcher_object_id);
+        crosshair_ivpsc = draw_info::IVPColor(crosshair_ivp, cs, crosshair_batcher_object_id);
 
         return hud_ui;
     }
@@ -154,10 +154,9 @@ int main() {
     GLFWLambdaCallbackManager glcm = tbx_engine::create_default_glcm_for_input_and_camera(
         tbx_engine.input_state, tbx_engine.fps_camera, tbx_engine.window, tbx_engine.shader_cache);
 
-    auto ball = vertex_geometry::generate_torus();
-    Transform ball_transform;
+    auto torus = vertex_geometry::generate_torus();
+    tbx_engine.batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.tag_id(torus);
 
-    glm::mat4 identity = glm::mat4(1);
     tbx_engine.shader_cache.set_uniform(
         ShaderType::CWL_V_TRANSFORMATION_UBOS_1024_WITH_SOLID_COLOR, ShaderUniformVariable::CAMERA_TO_CLIP,
         tbx_engine.fps_camera.get_projection_matrix(tbx_engine.window.width_px, tbx_engine.window.height_px));
@@ -166,7 +165,6 @@ int main() {
                                         ShaderUniformVariable::ASPECT_RATIO,
                                         glm::vec2(tbx_engine.window.height_px / (float)tbx_engine.window.width_px, 1));
 
-    // RateLimitedConsoleLogger tick_logger(1);
     ConsoleLogger tick_logger;
     tick_logger.disable_all_levels();
     std::function<void(double)> tick = [&](double dt) {
@@ -180,12 +178,7 @@ int main() {
                                             ShaderUniformVariable::WORLD_TO_CAMERA,
                                             tbx_engine.fps_camera.get_view_matrix());
 
-        std::vector<unsigned int> ltw_indices(ball.xyz_positions.size(), 0);
-        tbx_engine.batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.queue_draw(
-            0, ball.indices, ball.xyz_positions, ltw_indices);
-
-        tbx_engine.batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.ltw_matrices[0] =
-            ball_transform.get_transform_matrix();
+        tbx_engine.batcher.cwl_v_transformation_ubos_1024_with_solid_color_shader_batcher.queue_draw(torus);
 
         tbx_engine::potentially_switch_between_menu_and_3d_view(tbx_engine.input_state, input_graphics_sound_menu,
                                                                 tbx_engine.fps_camera, tbx_engine.window);
